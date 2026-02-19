@@ -1,0 +1,9 @@
+{
+  "scripts": {
+    "seed": "bun scripts/seed-demo-data.ts",
+    "test:rls": "bun scripts/test-rls-supabase-js.ts"
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "^2.97.0"
+  }
+}
