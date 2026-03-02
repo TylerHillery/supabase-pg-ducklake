@@ -24,6 +24,22 @@ GRANT duckdb_users TO supabase_auth_admin WITH INHERIT TRUE;
 GRANT duckdb_users TO supabase_storage_admin WITH INHERIT TRUE;
 
 ALTER SYSTEM SET duckdb.postgres_role = 'duckdb_users';
+
+-- Enable logical replication for CDC publications (e.g. orders_cdc).
+-- wal_level is postmaster-context so this takes effect on the next restart;
+-- the docker-compose command also passes -c wal_level=logical so it is
+-- active from the very first boot.
+ALTER SYSTEM SET wal_level = logical;
+
+-- DuckLake FDW's internal DuckDB↔Postgres loopback connection uses libpq with
+-- no host specified, which defaults to a Unix socket at /tmp/.s.PGSQL.5432.
+-- PostgreSQL defaults to /var/run/postgresql, so we add /tmp as well.
+-- The docker-compose command also passes this via -c to cover the first boot.
+-- GUC_LIST_QUOTE: each path must be individually double-quoted within the string.
+-- ALTER SYSTEM writes '"/var/run/postgresql,/tmp"' (wrong — one element) when given
+-- a plain comma-separated value, so we must pre-quote each path explicitly.
+ALTER SYSTEM SET unix_socket_directories = '"/var/run/postgresql","/tmp"';
+
 SELECT pg_reload_conf();
 
 -- Grant access to the ducklake catalog schema.

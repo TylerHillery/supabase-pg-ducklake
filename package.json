@@ -1,6 +1,7 @@
 {
   "scripts": {
     "seed": "bun scripts/seed-demo-data.ts",
+    "gen:orders": "bun scripts/gen-orders.ts",
     "test:rls": "bun scripts/test-rls-supabase-js.ts"
   },
   "dependencies": {

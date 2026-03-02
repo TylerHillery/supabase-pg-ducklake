@@ -484,8 +484,84 @@ Signs up two users via GoTrue, inserts data via service_role, then queries as ea
 
 ---
 
+## Better DX: Views Over SECURITY DEFINER Functions
+
+The `.rpc()` calling convention works but loses the "normal table" feel — you can't use PostgREST's query syntax (filtering, ordering, pagination via query params). A simple fix: **wrap the SECURITY DEFINER function in a view**.
+
+```sql
+CREATE VIEW public.yellow_trips_summary AS
+  SELECT * FROM get_my_trip_summary_ducklake();
+
+GRANT SELECT ON public.yellow_trips_summary TO authenticated;
+```
+
+This **still enforces RLS correctly** because:
+
+1. The view's definition references a **PL/pgSQL function**, not a DuckLake table directly
+2. When a client queries the view, PostgreSQL expands it to the function call and **Postgres executes the function** — not DuckDB
+3. Inside the function, `auth.uid()` is evaluated in PL/pgSQL as normal, then the DuckDB query runs with the plain UUID parameter
+4. pg_duckdb has no reason to intercept the view query because it doesn't reference any DuckLake table — it references a function that *returns a table type*, which is a regular Postgres result set
+
+The DX improvement is significant — clients get the familiar table-like interface:
+
+```typescript
+// Instead of:
+const { data } = await supabase.rpc('get_my_trip_summary_ducklake')
+
+// You get the normal table-like API with full PostgREST query syntax:
+const { data } = await supabase
+  .from('yellow_trips_summary')
+  .select('*')
+  .gte('total_amount', 100)
+  .order('trip_count', { ascending: false })
+  .limit(10)
+```
+
+This gives the illusion of querying a normal table while the function underneath still enforces row-level filtering. The view owner must have execute permission on the function, and `auth.uid()` continues to work because the session-level GUCs (set by PostgREST) are unaffected by the view's execution context.
+
+---
+
 ## TODO
 
 - [ ] Test INSERT/UPDATE/DELETE via SECURITY DEFINER functions (not just SELECT)
 - [ ] Benchmark: compare query latency of SECURITY DEFINER function wrapper vs direct table access
 - [ ] Investigate pg_duckdb function delegation (could it learn to call back into Postgres for unknown functions?)
+- [ ] Prototype the view-over-function pattern and verify PostgREST query params (filtering, ordering, pagination) work end-to-end
+
+---
+
+## Idea: pg_duckdb Could Delegate RLS Evaluation Back to Postgres
+
+This is technically feasible but non-trivial. Here's how RLS works under the hood:
+
+### How Postgres RLS works internally
+
+- Policies are stored in `pg_policy` catalog (per-table, per-command)
+- Each policy has a `USING` expression (a boolean expression like `user_id = auth.uid()`)
+- The Postgres executor **appends** these expressions as implicit WHERE clauses to every query on the table
+- The expressions can reference **any Postgres function** and **table columns**
+
+### What DuckDB would need to do
+
+The expression `user_id = auth.uid()` has two parts:
+- `user_id` — a column reference (DuckDB understands this)
+- `auth.uid()` — a Postgres function call (DuckDB does not)
+
+The most feasible approach would be for pg_duckdb to:
+
+1. Detect that a table has RLS enabled (read `pg_class.relrowsecurity`)
+2. Read the policy expressions from `pg_policy`
+3. **Pre-evaluate** any Postgres function calls (like `auth.uid()`) by executing them in Postgres — exactly what our SECURITY DEFINER functions do manually
+4. Rewrite the policy expression with resolved values: `user_id = auth.uid()` becomes `user_id = '550e8400-...'`
+5. Inject that as a DuckDB WHERE filter
+
+This is essentially **automating the SECURITY DEFINER pattern** inside pg_duckdb's query planner. The pg_duckdb extension already has a query planning hook where it intercepts queries — it could, at that stage, resolve RLS policies and inject the filters.
+
+### Why it's hard but not impossible
+
+- Policy expressions can be complex (subqueries, joins, multiple function calls) — not just simple `column = function()` comparisons
+- pg_duckdb would need to classify each sub-expression as "can evaluate in Postgres" vs "must push to DuckDB" and split accordingly
+- The current pg_duckdb architecture takes an all-or-nothing approach to query execution — it either handles the whole query or hands it back to Postgres entirely
+- But the postgres_scanner infrastructure is already there (DuckLake uses it for metadata), so calling back into Postgres for scalar function evaluation is plausible
+
+**The simpler version** — handling the common case of `column = auth.uid()` policies — would cover 90% of real-world Supabase RLS patterns and would be much easier to implement than the general case. That would be a great feature request for the pg_duckdb team.

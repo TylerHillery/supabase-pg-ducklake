@@ -1,3 +1,6 @@
+> [!WARNING]
+> This codebase is primarily AI-generated for demo and POC purposes.
+
 # Supabase + pg_ducklake
 
 PostgreSQL with embedded DuckDB ([pg_ducklake](https://github.com/duckdb/pg_ducklake)) running on the Supabase self-hosted stack. DuckLake tables store data as Parquet files in S3 (MinIO) via Supabase Storage, while metadata lives in PostgreSQL.

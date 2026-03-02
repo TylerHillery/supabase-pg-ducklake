@@ -96,7 +96,39 @@ END;
 $$;
 
 -- =============================================================================
--- 4. Grants
+-- 4. DuckLake trip summary (SECURITY DEFINER — manual auth.uid() filter)
+-- =============================================================================
+-- The yellow_trips_ducklake table is created by the seed script (seed-demo-data.ts)
+-- so that user_ids can be baked in at insert time.
+
+CREATE OR REPLACE FUNCTION public.get_my_trip_summary_ducklake()
+RETURNS TABLE (
+  trip_count BIGINT,
+  total_fare DOUBLE PRECISION,
+  total_tips DOUBLE PRECISION,
+  avg_distance DOUBLE PRECISION
+)
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = ''
+SET duckdb.unsafe_allow_execution_inside_functions = 'on'
+AS $$
+DECLARE
+  uid UUID := auth.uid();
+BEGIN
+  RETURN QUERY
+  SELECT
+    count(*)::BIGINT,
+    sum(t.fare_amount),
+    sum(t.tip_amount),
+    avg(t.trip_distance)
+  FROM private.yellow_trips_ducklake t
+  WHERE t.user_id = uid;
+END;
+$$;
+
+-- =============================================================================
+-- 5. Grants
 -- =============================================================================
 
 -- get_my_transactions: authenticated only
@@ -109,8 +141,13 @@ REVOKE EXECUTE ON FUNCTION public.get_my_transaction_summary() FROM PUBLIC;
 REVOKE EXECUTE ON FUNCTION public.get_my_transaction_summary() FROM anon;
 GRANT EXECUTE ON FUNCTION public.get_my_transaction_summary() TO authenticated;
 
--- insert_transaction: service_role only (not authenticated users)
+-- insert_transaction: service_role only
 REVOKE EXECUTE ON FUNCTION public.insert_transaction(UUID, DOUBLE PRECISION, TEXT) FROM PUBLIC;
 REVOKE EXECUTE ON FUNCTION public.insert_transaction(UUID, DOUBLE PRECISION, TEXT) FROM anon;
 REVOKE EXECUTE ON FUNCTION public.insert_transaction(UUID, DOUBLE PRECISION, TEXT) FROM authenticated;
 GRANT EXECUTE ON FUNCTION public.insert_transaction(UUID, DOUBLE PRECISION, TEXT) TO service_role;
+
+-- get_my_trip_summary_ducklake: authenticated only (table created by seed script)
+REVOKE EXECUTE ON FUNCTION public.get_my_trip_summary_ducklake() FROM PUBLIC;
+REVOKE EXECUTE ON FUNCTION public.get_my_trip_summary_ducklake() FROM anon;
+GRANT EXECUTE ON FUNCTION public.get_my_trip_summary_ducklake() TO authenticated;
